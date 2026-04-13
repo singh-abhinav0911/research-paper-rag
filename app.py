@@ -145,17 +145,19 @@ def export_to_word(summary: dict, paper_name: str) -> bytes:
 
 def export_to_pdf(summary: dict, paper_name: str) -> bytes:
     pdf = FPDF()
+    pdf.set_margins(15, 15, 15)  # left, top, right margins
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
+    effective_width = pdf.w - 2 * 15  # page width minus left+right margins
     pdf.set_font("Helvetica", "B", 16)
-    pdf.multi_cell(0, 10, clean_pdf_text(f"Research Paper Summary: {paper_name}"))
+    pdf.multi_cell(effective_width, 10, clean_pdf_text(f"Research Paper Summary: {paper_name}"))
     pdf.ln(4)
     for section, content in summary.items():
         pdf.set_font("Helvetica", "B", 12)
-        pdf.multi_cell(0, 8, clean_pdf_text(clean_export_heading(section)))
+        pdf.multi_cell(effective_width, 8, clean_pdf_text(clean_export_heading(section)))
         pdf.set_font("Helvetica", size=10)
         safe_content = clean_pdf_text(content)
-        pdf.multi_cell(0, 7, safe_content)
+        pdf.multi_cell(effective_width, 7, safe_content)
         pdf.ln(3)
     buffer = io.BytesIO()
     pdf.output(buffer)
@@ -297,7 +299,9 @@ with st.sidebar:
                     "collection": collection,
                     "title_text": title_text,
                     "summary":    None,
-                    "chunk_count": len(chunks)
+                    "chunk_count": len(chunks),
+                    "citations": None,
+                    "fact_check": None
                 }
                 st.session_state["chat_histories"][paper_name] = []
                 progress.progress((i + 1) / total, text=f"Done: {paper_name}")
@@ -393,8 +397,8 @@ st.markdown("<br/>", unsafe_allow_html=True)
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab_summary, tab_chat, tab_compare = st.tabs(
-    ["📋 Summary & Export", "💬 Chat", "📊 Compare Papers"]
+tab_summary, tab_chat, tab_compare, tab_citations = st.tabs(
+    ["📋 Summary & Export", "💬 Chat", "📊 Compare Papers", "🔍 Citations & Facts"]
 )
 
 
@@ -679,3 +683,94 @@ with tab_compare:
                         st.markdown(f"**{name}**")
                         st.markdown(section_answers[name])
                 st.markdown("---")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tab 4 — Citation Extraction & Fact-Checking
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_citations:
+    selected_paper_cite = st.selectbox("Select a paper", paper_names, key="cite_select")
+    paper_data_cite = st.session_state["papers"][selected_paper_cite]
+
+    col_extract, col_check = st.columns(2)
+
+    # ── Step 1: Extract Citations ──
+    with col_extract:
+        if st.button("📚 Extract Citations", type="primary", use_container_width=True):
+            with st.spinner("Extracting citations..."):
+                chunks = retrieve_relevant_chunks(
+                    paper_data_cite["collection"],
+                    "references bibliography citations list of works cited",
+                    n_results=8
+                )
+                citation_prompt = """Extract all citations/references from the text below.
+Return them as a numbered list with:
+- Author(s)
+- Year
+- Title (if available)
+- Venue/Journal (if available)
+
+Text:
+""" + "\n".join(chunks)
+
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": citation_prompt}],
+                    temperature=0.1,
+                    max_tokens=2048,
+                )
+                citations = response.choices[0].message.content
+                st.session_state["papers"][selected_paper_cite]["citations"] = citations
+
+        if st.session_state["papers"][selected_paper_cite].get("citations"):
+            st.markdown("### 📚 Extracted Citations")
+            st.markdown(st.session_state["papers"][selected_paper_cite]["citations"])
+
+    # ── Step 2: Fact-Check Key Claims ──
+    with col_check:
+        if st.button("🔍 Extract & Fact-Check Claims", type="primary", use_container_width=True):
+            with st.spinner("Identifying key claims..."):
+                chunks = retrieve_relevant_chunks(
+                    paper_data_cite["collection"],
+                    "results findings conclusions claims contributions",
+                    n_results=6
+                )
+                claim_prompt = """From the text below, extract the 5 most important factual claims the authors make.
+For each claim:
+1. State the claim clearly
+2. Note whether it has an inline citation supporting it (yes/no)
+3. Rate confidence the claim is well-supported: High / Medium / Low
+
+Format each as:
+CLAIM: ...
+CITED: yes/no
+SUPPORT: High/Medium/Low
+REASON: one sentence explanation
+
+Text:
+""" + "\n".join(chunks)
+
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": claim_prompt}],
+                    temperature=0.1,
+                    max_tokens=2048,
+                )
+                fact_check = response.choices[0].message.content
+                st.session_state["papers"][selected_paper_cite]["fact_check"] = fact_check
+
+        if st.session_state["papers"][selected_paper_cite].get("fact_check"):
+            st.markdown("### 🔍 Fact-Check Results")
+            # Color-code by support level
+            for line in st.session_state["papers"][selected_paper_cite]["fact_check"].split("\n"):
+                if line.startswith("CLAIM:"):
+                    st.markdown(f"**{line}**")
+                elif "High" in line:
+                    st.success(line)
+                elif "Medium" in line:
+                    st.warning(line)
+                elif "Low" in line:
+                    st.error(line)
+                else:
+                    st.markdown(line)
