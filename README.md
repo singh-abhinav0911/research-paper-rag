@@ -19,7 +19,7 @@ A RAG-based research paper summarizer built with Streamlit, ChromaDB, and LLaMA 
 ## ⚙️ Setup
 
 1. Clone the repo
-   git clone https://github.com/YOUR_USERNAME/research-paper-rag.git
+   git clone https://github.com/singh=abhinav0911/research-paper-rag.git
    cd research-paper-rag
 
 2. Install dependencies
